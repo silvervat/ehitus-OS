@@ -1,0 +1,8 @@
+{
+  "name": "Enterprise OS",
+  "description": "A high-performance enterprise resource planning and project management system designed to handle massive datasets with AI-powered insights.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
