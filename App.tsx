@@ -12,13 +12,50 @@ import { ViewType, SidebarItem } from './types';
 import { schemaStore } from './services/schemaStore';
 import { Database, FolderOpen } from 'lucide-react';
 import { AIAssistant } from './components/AIAssistant';
+import { CommandPalette } from './components/CommandPalette';
+import { automationEngine } from './services/automationEngine'; // Init engine
+import { historyStore } from './services/historyStore'; // Init history
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewType>(ViewType.DASHBOARD);
   const [dynamicTableId, setDynamicTableId] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<string[]>([]);
   
   // Merge static sidebar items with dynamic tables
   const [navItems, setNavItems] = useState<SidebarItem[]>(SIDEBAR_DATA);
+
+  // Automation Toasts
+  useEffect(() => {
+      const handleToast = (e: any) => {
+          const msg = e.detail.message;
+          setToasts(prev => [...prev, msg]);
+          setTimeout(() => setToasts(prev => prev.filter(t => t !== msg)), 5000);
+      };
+      window.addEventListener('automation-toast', handleToast);
+      return () => window.removeEventListener('automation-toast', handleToast);
+  }, []);
+
+  // Keyboard Shortcuts (Undo/Redo)
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+              if (e.shiftKey) {
+                  e.preventDefault();
+                  historyStore.redo();
+              } else {
+                  e.preventDefault();
+                  historyStore.undo();
+              }
+          }
+          // Some browsers use Ctrl+Y for Redo
+          if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+              e.preventDefault();
+              historyStore.redo();
+          }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   useEffect(() => {
     const syncNavigation = () => {
@@ -102,6 +139,18 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-100">
+      {/* Global Features */}
+      <CommandPalette onNavigate={handleNavigate} />
+      
+      {/* Toasts */}
+      <div className="fixed top-4 right-4 z-[100] space-y-2 pointer-events-none">
+          {toasts.map((msg, i) => (
+              <div key={i} className="bg-slate-800 text-white px-4 py-2 rounded shadow-lg animate-in slide-in-from-right text-sm font-medium">
+                  {msg}
+              </div>
+          ))}
+      </div>
+
       {/* Left Sidebar */}
       <Sidebar 
         items={navItems} 

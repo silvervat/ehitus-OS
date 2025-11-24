@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { SidebarItem, ViewType, ProjectData, ChartData } from './types';
 import { 
@@ -15,6 +16,30 @@ import {
   AlertCircle,
   FolderOpen
 } from 'lucide-react';
+
+// --- UTILS ---
+
+export const formatDate = (isoString: string | undefined | null): string => {
+    if (!isoString) return '-';
+    try {
+        const d = new Date(isoString);
+        if (isNaN(d.getTime())) return isoString; // Return original if parse fails
+        
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = String(d.getFullYear()).slice(-2); // Get last 2 digits
+        
+        return `${day}.${month}.${year}`;
+    } catch (e) {
+        return isoString || '-';
+    }
+};
+
+export const MOCK_USERS = [
+     { id: 'u1', name: 'Kristofer Nilp', email: 'kristofer@rivest.ee', roleId: 'admin', status: 'active', avatarUrl: 'KN' },
+     { id: 'u2', name: 'Elvis Juus', email: 'elvis@rivest.ee', roleId: 'manager', status: 'active', avatarUrl: 'EJ' },
+     { id: 'u3', name: 'Kuldar Kosina', email: 'kuldar@rivest.ee', roleId: 'foreman', status: 'active', avatarUrl: 'KK' },
+];
 
 export const SIDEBAR_DATA: SidebarItem[] = [
   {
@@ -80,28 +105,63 @@ const MANAGERS = ['Kristofer Nilp', 'Elvis Juus', 'Kuldar Kosina', 'Vahur Junine
 const CLIENTS = ['Nordec OY', 'Merko', 'Fund Ehitus', 'Harmet', 'E-Piim', 'Mapri', 'Bonava', 'YIT'];
 const STATUSES: ProjectData['status'][] = ['Töös', 'Planeerimisel', 'Peatatud', 'Lõpetatud'];
 
-// Generate massive dataset for virtualization test
-export const GENERATE_LARGE_DATASET = (): ProjectData[] => {
-    const data = [...MOCK_PROJECTS];
-    // Generating 50,000 rows to simulate "millions" logic (pure JS array limits apply in browser)
-    for(let i=0; i<50000; i++) {
-        const mgrIndex = Math.floor(Math.random() * MANAGERS.length);
-        const clientIndex = Math.floor(Math.random() * CLIENTS.length);
-        const statusIndex = Math.floor(Math.random() * STATUSES.length);
-        
-        data.push({
-            id: `GEN-${1000 + i}`,
-            name: `Projekt ${i} - ${CLIENTS[clientIndex]} Laiendus`,
-            client: CLIENTS[clientIndex],
-            status: STATUSES[statusIndex],
-            manager: MANAGERS[mgrIndex],
-            hoursUsed: Math.floor(Math.random() * 2000),
-            hoursTotal: Math.floor(Math.random() * 5000) + 2000,
-            budget: Math.floor(Math.random() * 500000),
-            startDate: '2024-01-01',
-            deadline: '2025-12-31'
-        })
+// --- GRANULAR GETTERS FOR HIGH PERF SORTING (Avoiding Object Creation) ---
+
+export const getProjectStatus = (i: number): string => {
+    if (i < MOCK_PROJECTS.length) return MOCK_PROJECTS[i].status;
+    return STATUSES[i % STATUSES.length];
+};
+
+export const getProjectName = (i: number): string => {
+    if (i < MOCK_PROJECTS.length) return MOCK_PROJECTS[i].name;
+    const clientIndex = i % CLIENTS.length;
+    return `Projekt #${i} - ${CLIENTS[clientIndex]} Laiendus`;
+};
+
+export const getProjectManager = (i: number): string => {
+    if (i < MOCK_PROJECTS.length) return MOCK_PROJECTS[i].manager;
+    return MANAGERS[i % MANAGERS.length];
+};
+
+export const getProjectClient = (i: number): string => {
+    if (i < MOCK_PROJECTS.length) return MOCK_PROJECTS[i].client;
+    return CLIENTS[i % CLIENTS.length];
+};
+
+export const getProjectHours = (i: number): number => {
+    if (i < MOCK_PROJECTS.length) return MOCK_PROJECTS[i].hoursUsed;
+    return (i * 13) % 2000;
+};
+
+// DETERMINISTIC ON-DEMAND GENERATOR (No memory overhead)
+export const getMockProject = (index: number): ProjectData => {
+    // Return existing mock if within range
+    if (index < MOCK_PROJECTS.length) {
+        return MOCK_PROJECTS[index];
     }
+    
+    // Generate Deterministically using the same logic as granular getters
+    const i = index;
+    
+    return {
+        id: `GEN-${i}`,
+        name: getProjectName(i),
+        client: getProjectClient(i),
+        status: getProjectStatus(i) as any,
+        manager: getProjectManager(i),
+        hoursUsed: getProjectHours(i),
+        hoursTotal: ((i * 17) % 5000) + 2000,
+        budget: ((i * 23) % 500000) + 10000,
+        startDate: '2024-01-01',
+        deadline: '2025-12-31'
+    };
+};
+
+// Replaces GENERATE_LARGE_DATASET which caused memory crashes
+export const GENERATE_LARGE_DATASET = (count: number = 50): ProjectData[] => {
+    // Only used for small initial states now
+    const data = [];
+    for(let i=0; i<count; i++) data.push(getMockProject(i));
     return data;
 }
 

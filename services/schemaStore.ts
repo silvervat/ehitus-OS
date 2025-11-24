@@ -1,8 +1,9 @@
 
-import { TableDefinition, User, Role, PermissionMatrix, PermissionRule, SavedView, FileAsset, FormLayout, ColumnPermissionMatrix, ColumnPermission } from '../types';
-import { MOCK_PROJECTS, GENERATE_LARGE_DATASET } from '../constants';
+import { TableDefinition, Role, PermissionMatrix, PermissionRule, SavedView, FileAsset, FormLayout, ColumnPermissionMatrix, ColumnPermission } from '../types';
+import { GENERATE_LARGE_DATASET, MOCK_USERS } from '../constants';
+import { historyStore } from './historyStore';
 
-// Default System Roles
+// ... (Keep existing INITIAL constants) ...
 const INITIAL_ROLES: Role[] = [
     { id: 'admin', name: 'Administraator', color: '#ef4444', description: 'Täielik ligipääs süsteemile', isSystem: true },
     { id: 'manager', name: 'Projektijuht', color: '#3b82f6', description: 'Juhib projekte ja meeskondi' },
@@ -12,18 +13,12 @@ const INITIAL_ROLES: Role[] = [
 ];
 
 const INITIAL_PERMISSIONS: PermissionMatrix = {
-    'admin': {}, // Admin has logic override to allow everything
+    'admin': {}, 
     'manager': {},
     'client': {}
 };
 
-// Initial Mock Users
-export const MOCK_USERS: User[] = [
-    { id: 'u1', name: 'Kristofer Nilp', email: 'kristofer@rivest.ee', roleId: 'admin', status: 'active', avatarUrl: 'KN' },
-    { id: 'u2', name: 'Elvis Juus', email: 'elvis@rivest.ee', roleId: 'manager', status: 'active', avatarUrl: 'EJ' },
-    { id: 'u3', name: 'Kuldar Kosina', email: 'kuldar@rivest.ee', roleId: 'foreman', status: 'active', avatarUrl: 'KK' },
-];
-
+// ... (Keep existing INITIAL_TABLES) ...
 const INITIAL_TABLES: TableDefinition[] = [
     {
         id: 'companies',
@@ -69,40 +64,7 @@ const INITIAL_TABLES: TableDefinition[] = [
             budget: p.budget,
             progress: Math.round((p.hoursUsed / p.hoursTotal) * 100)
         })),
-        views: [
-            {
-                id: 'v_all',
-                name: 'Kõik Projektid',
-                viewMode: 'grid',
-                filters: {},
-                sortConfig: { key: 'name', direction: 'asc' },
-                hiddenColumnKeys: []
-            },
-            {
-                id: 'v_active',
-                name: 'Aktiivsed Tööd',
-                viewMode: 'grid',
-                filters: { 'status': 'Töös' },
-                sortConfig: { key: 'progress', direction: 'desc' },
-                hiddenColumnKeys: ['client_id', 'budget']
-            },
-            {
-                id: 'v_cards',
-                name: 'Projektide Galerii',
-                viewMode: 'gallery',
-                filters: {},
-                sortConfig: null,
-                hiddenColumnKeys: []
-            },
-            {
-                id: 'v_gantt',
-                name: 'Ajatelg (Gantt)',
-                viewMode: 'gantt',
-                filters: {},
-                sortConfig: null,
-                hiddenColumnKeys: []
-            }
-        ]
+        views: []
     },
     {
         id: 'daily_logs',
@@ -118,7 +80,6 @@ const INITIAL_TABLES: TableDefinition[] = [
             { key: 'ai_description', label: 'AI Analüüs', type: 'text', width: 250, hidden: true }
         ],
         rows: [
-             // Generating rows for current month to show in Calendar
             ...Array.from({ length: 5 }).map((_, i) => {
                 const d = new Date();
                 d.setDate(d.getDate() - i * 2);
@@ -163,27 +124,11 @@ const INITIAL_TABLES: TableDefinition[] = [
         columns: [
             { key: 'name', label: 'Nimi', type: 'text', width: 180 },
             { key: 'email', label: 'Email', type: 'text', width: 200 },
-            { key: 'roleId', label: 'Roll', type: 'select', options: [], width: 120 }, // Options populated dynamically
+            { key: 'roleId', label: 'Roll', type: 'select', options: [], width: 120 }, 
             { key: 'status', label: 'Staatus', type: 'status', width: 100 },
             { key: 'avatar', label: 'Avatar', type: 'image', width: 80 }
         ],
         rows: MOCK_USERS,
-        views: []
-    },
-    {
-        id: 'external_weather',
-        name: 'Väline API: Ilm',
-        columns: [
-            { key: 'city', label: 'Linn', type: 'text', width: 150 },
-            { key: 'temp', label: 'Temperatuur', type: 'number', width: 100 },
-            { key: 'condition', label: 'Olukord', type: 'tags', width: 150 },
-            { key: 'last_updated', label: 'Uuendatud', type: 'date', width: 150 }
-        ],
-        rows: [
-            { id: 'w1', city: 'Tallinn', temp: 12, condition: ['Pilvine', 'Tuuline'], last_updated: '2024-10-25' },
-            { id: 'w2', city: 'Tartu', temp: 14, condition: ['Päikseline'], last_updated: '2024-10-25' },
-            { id: 'w3', city: 'Helsinki', temp: 11, condition: ['Vihm'], last_updated: '2024-10-25' }
-        ],
         views: []
     }
 ];
@@ -192,24 +137,38 @@ class SchemaStore {
     private tables: TableDefinition[];
     private roles: Role[];
     private permissions: PermissionMatrix;
-    private colPermissions: ColumnPermissionMatrix; // TableId -> ColKey -> RoleId -> Perm
+    private colPermissions: ColumnPermissionMatrix; 
     private listeners: Function[] = [];
 
     constructor() {
-        const savedTables = localStorage.getItem('rivest_schema_v5'); // bumped version for Forms
-        const savedRoles = localStorage.getItem('rivest_roles_v1');
-        const savedPerms = localStorage.getItem('rivest_perms_v1');
-        const savedColPerms = localStorage.getItem('rivest_col_perms_v1');
-
-        this.tables = savedTables ? JSON.parse(savedTables) : INITIAL_TABLES;
-        this.roles = savedRoles ? JSON.parse(savedRoles) : INITIAL_ROLES;
-        this.permissions = savedPerms ? JSON.parse(savedPerms) : INITIAL_PERMISSIONS;
-        this.colPermissions = savedColPerms ? JSON.parse(savedColPerms) : {};
+        this.tables = this.loadSafe('rivest_schema_v5', INITIAL_TABLES);
+        this.roles = this.loadSafe('rivest_roles_v1', INITIAL_ROLES);
+        this.permissions = this.loadSafe('rivest_perms_v1', INITIAL_PERMISSIONS);
+        this.colPermissions = this.loadSafe('rivest_col_perms_v1', {});
+        
+        if (!Array.isArray(this.tables)) {
+            this.tables = INITIAL_TABLES;
+        }
+        this.tables.forEach(t => {
+            if(!t.rows) t.rows = [];
+            if(!t.columns) t.columns = [];
+            if(!t.views) t.views = [];
+        });
     }
 
-    // --- TABLES ---
+    private loadSafe(key: string, fallback: any) {
+        try {
+            const item = localStorage.getItem(key);
+            if (!item || item === 'undefined' || item === 'null') return fallback;
+            return JSON.parse(item);
+        } catch (e) {
+            return fallback;
+        }
+    }
+
     getTables() { return this.tables; }
     getTable(id: string) { return this.tables.find(t => t.id === id); }
+    getRoles() { return this.roles; }
 
     addTable(name: string) {
         const newId = name.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now();
@@ -228,22 +187,6 @@ class SchemaStore {
         return newTable;
     }
 
-    updateTable(tableId: string, updates: Partial<TableDefinition>) {
-        const idx = this.tables.findIndex(t => t.id === tableId);
-        if (idx > -1) {
-            this.tables[idx] = { ...this.tables[idx], ...updates };
-            this.save();
-        }
-    }
-
-    saveFormLayout(tableId: string, layout: FormLayout) {
-        const table = this.tables.find(t => t.id === tableId);
-        if(table) {
-            table.formLayout = layout;
-            this.save();
-        }
-    }
-
     addColumn(tableId: string, column: any) {
         const table = this.tables.find(t => t.id === tableId);
         if (table) {
@@ -257,7 +200,14 @@ class SchemaStore {
         if (table) {
             const colIndex = table.columns.findIndex(c => c.key === columnKey);
             if (colIndex > -1) {
-                table.columns[colIndex] = { ...table.columns[colIndex], ...updates };
+                // Ensure deep merge for nested objects like validation/style
+                const col = table.columns[colIndex];
+                table.columns[colIndex] = { 
+                    ...col, 
+                    ...updates,
+                    validation: { ...col.validation, ...updates.validation },
+                    style: { ...col.style, ...updates.style }
+                };
                 this.save();
             }
         }
@@ -279,41 +229,79 @@ class SchemaStore {
         }
     }
 
-    deleteColumn(tableId: string, columnKey: string) {
-         const table = this.tables.find(t => t.id === tableId);
-        if (table) {
-            table.columns = table.columns.filter(c => c.key !== columnKey);
+    saveFormLayout(tableId: string, layout: FormLayout) {
+        const table = this.tables.find(t => t.id === tableId);
+        if(table) {
+            table.formLayout = layout;
             this.save();
         }
     }
 
-    addRow(tableId: string, row: any) {
+    addRow(tableId: string, row: any, skipHistory: boolean = false) {
         const table = this.tables.find(t => t.id === tableId);
         if (table) {
-            const newId = `gen-${Date.now()}`;
-            table.rows.push({ id: newId, ...row });
+            const newId = row.id || `gen-${Date.now()}`;
+            const newRow = { ...row, id: newId };
+            
+            table.rows.push(newRow);
             this.save();
-            return newId; // Return ID so we can update it async
+
+            if (!skipHistory) {
+                historyStore.record({
+                    type: 'CREATE',
+                    tableId,
+                    rowId: newId,
+                    before: null,
+                    after: newRow
+                });
+            }
+            return newId;
         }
         return null;
     }
     
-    updateRow(tableId: string, rowId: string, data: any) {
+    updateRow(tableId: string, rowId: string, data: any, skipHistory: boolean = false) {
         const table = this.tables.find(t => t.id === tableId);
         if (table) {
             const idx = table.rows.findIndex(r => r.id === rowId);
             if(idx > -1) {
-                table.rows[idx] = { ...table.rows[idx], ...data };
+                const oldRow = { ...table.rows[idx] };
+                const newRow = { ...oldRow, ...data };
+                
+                table.rows[idx] = newRow;
                 this.save();
+
+                if (!skipHistory) {
+                    historyStore.record({
+                        type: 'UPDATE',
+                        tableId,
+                        rowId,
+                        before: oldRow,
+                        after: newRow
+                    });
+                }
             }
         }
     }
 
-    deleteRow(tableId: string, rowId: string) {
+    deleteRow(tableId: string, rowId: string, skipHistory: boolean = false) {
         const table = this.tables.find(t => t.id === tableId);
         if (table) {
+            const oldRow = table.rows.find(r => r.id === rowId);
+            if (!oldRow) return;
+
             table.rows = table.rows.filter(r => r.id !== rowId);
             this.save();
+
+            if (!skipHistory) {
+                historyStore.record({
+                    type: 'DELETE',
+                    tableId,
+                    rowId,
+                    before: oldRow,
+                    after: null
+                });
+            }
         }
     }
 
@@ -322,20 +310,15 @@ class SchemaStore {
         if (table) {
             const row = table.rows.find(r => r.id === rowId);
             if (row) {
-                // Deep copy and new ID
                 const newRow = JSON.parse(JSON.stringify(row));
                 newRow.id = `copy-${Date.now()}`;
-                
-                // Modify name if exists to indicate copy
                 if (newRow.name) newRow.name = `${newRow.name} (Koopia)`;
                 
-                table.rows.push(newRow);
-                this.save();
+                this.addRow(tableId, newRow); // This will handle history internally
             }
         }
     }
 
-    // --- VIEWS ---
     addView(tableId: string, view: SavedView) {
         const table = this.tables.find(t => t.id === tableId);
         if(table) {
@@ -353,7 +336,6 @@ class SchemaStore {
         }
     }
 
-    // --- ASSETS ---
     getLookupMap(tableId: string, labelKey: string): Record<string, string> {
         const table = this.getTable(tableId);
         if (!table) return {};
@@ -365,10 +347,12 @@ class SchemaStore {
     
     getAllAssets(): FileAsset[] {
         const assets: FileAsset[] = [];
+        if (!Array.isArray(this.tables)) return [];
+
         this.tables.forEach(table => {
+            if (!table.columns || !table.rows) return;
             const fileCols = table.columns.filter(c => c.type === 'image' || c.type === 'file');
             if(fileCols.length === 0) return;
-
             table.rows.forEach(row => {
                 fileCols.forEach(col => {
                     const url = row[col.key];
@@ -392,18 +376,13 @@ class SchemaStore {
 
     getTotalStats() {
         let totalRows = 0;
+        if (!Array.isArray(this.tables)) return { totalRows: 0, totalTables: 0, totalFiles: 0 };
         let totalTables = this.tables.length;
         let totalFiles = this.getAllAssets().length; 
-        
-        this.tables.forEach(t => totalRows += t.rows.length);
-        
+        this.tables.forEach(t => totalRows += (t.rows ? t.rows.length : 0));
         return { totalRows, totalTables, totalFiles };
     }
 
-    // --- ROLES & PERMISSIONS ---
-
-    getRoles() { return this.roles; }
-    
     addRole(name: string, color: string) {
         const newRole: Role = {
             id: name.toLowerCase().replace(/\s+/g, '_') + '_' + Math.floor(Math.random() * 1000),
@@ -424,61 +403,46 @@ class SchemaStore {
         }
     }
 
-    // Get permission for a specific role and table.
     getPermission(roleId: string, tableId: string): PermissionRule {
-        if (roleId === 'admin') {
-            return { view: true, create: true, edit: true, delete: true };
-        }
-        
+        if (roleId === 'admin') return { view: true, create: true, edit: true, delete: true };
         const rolePerms = this.permissions[roleId];
-        if (rolePerms && rolePerms[tableId]) {
-            return rolePerms[tableId];
-        }
-
-        // Default: No Access
+        if (rolePerms && rolePerms[tableId]) return rolePerms[tableId];
         return { view: false, create: false, edit: false, delete: false };
     }
 
     updatePermission(roleId: string, tableId: string, rule: Partial<PermissionRule>) {
-        if (roleId === 'admin') return; // Cannot restrict admin
-
+        if (roleId === 'admin') return;
         if (!this.permissions[roleId]) this.permissions[roleId] = {};
-        
         const current = this.getPermission(roleId, tableId);
         this.permissions[roleId][tableId] = { ...current, ...rule };
-        
         this.save();
     }
 
-    // --- COLUMN LEVEL PERMISSIONS ---
-    
     getColumnPermission(roleId: string, tableId: string, columnKey: string): ColumnPermission {
         if (roleId === 'admin') return { view: true, edit: true };
-        
         const tablePerms = this.colPermissions[tableId];
         if (tablePerms && tablePerms[columnKey] && tablePerms[columnKey][roleId]) {
             return tablePerms[columnKey][roleId];
         }
-        // Default: Allow
         return { view: true, edit: true };
     }
 
     updateColumnPermission(roleId: string, tableId: string, columnKey: string, perm: Partial<ColumnPermission>) {
         if (roleId === 'admin') return;
-        
         if (!this.colPermissions[tableId]) this.colPermissions[tableId] = {};
         if (!this.colPermissions[tableId][columnKey]) this.colPermissions[tableId][columnKey] = {};
-        
         const current = this.getColumnPermission(roleId, tableId, columnKey);
         this.colPermissions[tableId][columnKey][roleId] = { ...current, ...perm };
         this.save();
     }
 
-    // --- INFRASTRUCTURE ---
-
     subscribe(listener: Function) {
         this.listeners.push(listener);
         return () => { this.listeners = this.listeners.filter(l => l !== listener); };
+    }
+    
+    forceRefresh() {
+        this.listeners.forEach(l => l());
     }
 
     private save() {

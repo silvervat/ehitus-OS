@@ -1,6 +1,6 @@
 
 import { FileNode, FileActivity, User, FileAsset } from '../types';
-import { schemaStore, MOCK_USERS } from './schemaStore';
+import { MOCK_USERS } from '../constants';
 
 // Initial Mock Data for Drive
 const MOCK_FILES: FileNode[] = [
@@ -8,18 +8,6 @@ const MOCK_FILES: FileNode[] = [
         id: 'root_1',
         parentId: null,
         name: 'Minu Dokumendid',
-        type: 'folder',
-        size: 0,
-        ownerId: 'u1',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        shareConfig: { isPublic: false, accessLevel: 'view', sharedWithUserIds: [] },
-        activityLog: []
-    },
-    {
-        id: 'root_2',
-        parentId: null,
-        name: 'Projektide Arhiiv 2024',
         type: 'folder',
         size: 0,
         ownerId: 'u1',
@@ -42,68 +30,35 @@ const MOCK_FILES: FileNode[] = [
         updatedAt: new Date().toISOString(),
         shareConfig: { isPublic: false, accessLevel: 'view', sharedWithUserIds: [] },
         activityLog: []
-    },
-    {
-        id: 'f_2',
-        parentId: 'root_1',
-        name: 'Märkmed.txt',
-        type: 'file',
-        size: 1024,
-        mimeType: 'text/plain',
-        url: '#',
-        content: 'Koosoleku märkmed:\n1. Vaata üle eelarve\n2. Kinnita puhkused\n3. Telli uus kraana',
-        ownerId: 'u1',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        shareConfig: { isPublic: false, accessLevel: 'view', sharedWithUserIds: [] },
-        activityLog: []
-    },
-    {
-        id: 'zip_1',
-        parentId: null,
-        name: 'Vanad_Pildid.zip',
-        type: 'file',
-        size: 5000000,
-        mimeType: 'application/zip',
-        url: '#',
-        ownerId: 'u1',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        shareConfig: { isPublic: false, accessLevel: 'view', sharedWithUserIds: [] },
-        activityLog: []
     }
 ];
 
 class FileSystemStore {
     private files: FileNode[];
     private listeners: Function[] = [];
-    private currentUser: User = MOCK_USERS[0]; // Simulate logged in admin
+    private currentUser: User = MOCK_USERS[0] as User;
 
     constructor() {
-        const saved = localStorage.getItem('rivest_drive_v1');
-        this.files = saved ? JSON.parse(saved) : MOCK_FILES;
+        try {
+            const saved = localStorage.getItem('rivest_drive_v2');
+            this.files = saved && saved !== 'undefined' ? JSON.parse(saved) : MOCK_FILES;
+        } catch (e) {
+            console.warn("Failed to load FileSystem, resetting.", e);
+            this.files = MOCK_FILES;
+        }
     }
 
-    // --- READ ---
-    getFiles(parentId: string | null = null, includeDeleted = false): FileNode[] {
-        return this.files.filter(f => 
-            f.parentId === parentId && 
-            (includeDeleted ? true : !f.isDeleted)
-        );
-    }
-    
     getAllFiles(): FileNode[] {
         return this.files;
     }
 
-    getFile(id: string) {
-        return this.files.find(f => f.id === id);
-    }
+    createFolder(parentId: string | null, name: string): FileNode {
+        // Check for duplicate
+        const existing = this.files.find(f => f.parentId === parentId && f.name === name && f.type === 'folder' && !f.isDeleted);
+        if (existing) return existing;
 
-    // --- ACTIONS ---
-    createFolder(parentId: string | null, name: string) {
         const newFolder: FileNode = {
-            id: `folder_${Date.now()}`,
+            id: `folder_${Date.now()}_${Math.floor(Math.random()*1000)}`,
             parentId,
             name,
             type: 'folder',
@@ -112,14 +67,7 @@ class FileSystemStore {
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             shareConfig: { isPublic: false, accessLevel: 'view', sharedWithUserIds: [] },
-            activityLog: [{
-                id: `act_${Date.now()}`,
-                userId: this.currentUser.id,
-                userName: this.currentUser.name,
-                action: 'upload', // 'create'
-                timestamp: new Date().toISOString(),
-                details: 'Kaust loodud'
-            }]
+            activityLog: []
         };
         this.files.push(newFolder);
         this.save();
@@ -127,148 +75,104 @@ class FileSystemStore {
     }
 
     uploadFile(parentId: string | null, file: File) {
-        // Simulate upload
+        // Handle folder upload path simulation
+        // If file.webkitRelativePath exists (e.g., "Folder/Sub/file.txt")
+        // We need to ensure the folders exist.
+        
+        let targetParentId = parentId;
+
+        // Note: webkitRelativePath is available on File object in Chrome/Firefox when directory upload is used
+        const relPath = (file as any).webkitRelativePath as string;
+        
+        if (relPath) {
+            const parts = relPath.split('/');
+            // The last part is the filename, previous parts are folders
+            // parts[0] is the root folder name being uploaded
+            
+            // Iterate through folders in path
+            for (let i = 0; i < parts.length - 1; i++) {
+                const folderName = parts[i];
+                const folder = this.createFolder(targetParentId, folderName);
+                targetParentId = folder.id;
+            }
+        }
+
         const newFile: FileNode = {
-            id: `file_${Date.now()}`,
-            parentId,
+            id: `file_${Date.now()}_${Math.floor(Math.random()*1000)}`,
+            parentId: targetParentId,
             name: file.name,
             type: 'file',
             size: file.size,
             mimeType: file.type || 'application/octet-stream',
-            url: URL.createObjectURL(file), // Local blob for demo
+            url: URL.createObjectURL(file),
             ownerId: this.currentUser.id,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             shareConfig: { isPublic: false, accessLevel: 'view', sharedWithUserIds: [] },
-            activityLog: [{
-                id: `act_${Date.now()}`,
-                userId: this.currentUser.id,
-                userName: this.currentUser.name,
-                action: 'upload',
-                timestamp: new Date().toISOString(),
-                details: 'Fail üles laetud'
-            }]
+            activityLog: []
         };
         this.files.push(newFile);
         this.save();
     }
     
-    // Simulate Unzipping
     unzipFile(fileId: string) {
         const zipFile = this.files.find(f => f.id === fileId);
         if (!zipFile) return;
 
-        // 1. Create a folder with the zip name
-        const folderName = zipFile.name.replace('.zip', '');
+        const folderName = zipFile.name.replace('.zip', '') + '_Unzipped';
         const folder = this.createFolder(zipFile.parentId, folderName);
 
-        // 2. Create dummy content inside
-        const dummyFiles = ['Pilt_001.jpg', 'Raport.pdf', 'Andmed.csv'];
+        // Simulation of extracted files
+        const dummyFiles = ['Pilt_001.jpg', 'Raport_Final.pdf', 'Andmed_Export.csv', 'Readme.txt'];
         dummyFiles.forEach((name, i) => {
              const extracted: FileNode = {
                 id: `extr_${Date.now()}_${i}`,
                 parentId: folder.id,
                 name: name,
                 type: 'file',
-                size: Math.floor(Math.random() * 100000),
-                mimeType: name.endsWith('jpg') ? 'image/jpeg' : (name.endsWith('pdf') ? 'application/pdf' : 'text/csv'),
-                url: `https://source.unsplash.com/random/100x100?sig=${i}`, // Dummy url
-                content: name.endsWith('csv') ? 'ID,Name,Value\n1,Test,100\n2,Demo,200' : undefined,
+                size: Math.floor(Math.random() * 500000), // Random size
+                mimeType: name.endsWith('jpg') ? 'image/jpeg' : (name.endsWith('pdf') ? 'application/pdf' : 'text/plain'),
+                url: '#',
                 ownerId: this.currentUser.id,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 shareConfig: { isPublic: false, accessLevel: 'view', sharedWithUserIds: [] },
-                activityLog: [{
-                    id: `act_${Date.now()}_${i}`,
-                    userId: this.currentUser.id,
-                    userName: this.currentUser.name,
-                    action: 'unzip',
-                    timestamp: new Date().toISOString(),
-                    details: `Lahti pakitud failist ${zipFile.name}`
-                }]
+                activityLog: []
             };
             this.files.push(extracted);
         });
-        
-        this.logActivity(zipFile.id, 'unzip', 'Arhiiv lahti pakitud');
         this.save();
-    }
-
-    moveItem(id: string, newParentId: string | null) {
-        const item = this.files.find(f => f.id === id);
-        if (item) {
-            item.parentId = newParentId;
-            item.updatedAt = new Date().toISOString();
-            this.logActivity(id, 'move', newParentId ? `Liigutatud kausta` : 'Liigutatud juurkausta');
-            this.save();
-        }
     }
 
     deleteItem(id: string) {
         const item = this.files.find(f => f.id === id);
         if (item) {
-            // Soft delete
             item.isDeleted = true;
-            this.logActivity(id, 'delete', 'Liigutatud prügikasti');
             this.save();
         }
     }
     
-    updateContent(id: string, newContent: string) {
-        const item = this.files.find(f => f.id === id);
-        if (item) {
-            item.content = newContent;
-            item.updatedAt = new Date().toISOString();
-            this.logActivity(id, 'edit', 'Sisu muudetud online redaktoris');
-            this.save();
-        }
-    }
-
-    // --- SHARING ---
     generatePublicLink(id: string): string {
         const item = this.files.find(f => f.id === id);
         if (!item) return '';
-        
         const link = `https://rivest.ee/s/${Math.random().toString(36).substring(7)}`;
         item.shareConfig.isPublic = true;
         item.shareConfig.publicLink = link;
-        
-        this.logActivity(id, 'share', 'Loodud avalik link');
         this.save();
         return link;
     }
-
-    togglePublic(id: string, status: boolean) {
-        const item = this.files.find(f => f.id === id);
-        if(item) {
-            item.shareConfig.isPublic = status;
-            this.save();
-        }
-    }
-
-    // --- ACTIVITY ---
-    logActivity(fileId: string, action: FileActivity['action'], details: string) {
-        const item = this.files.find(f => f.id === fileId);
-        if (item) {
-            item.activityLog.unshift({
-                id: `act_${Date.now()}`,
-                userId: this.currentUser.id,
-                userName: this.currentUser.name,
-                timestamp: new Date().toISOString(),
-                action,
-                details
-            });
-        }
-    }
-
-    // --- HELPERS ---
+    
     getPath(fileId: string): FileNode[] {
         const path: FileNode[] = [];
         let current = this.files.find(f => f.id === fileId);
-        while (current) {
+        
+        // Safety break to prevent infinite loops in bad data
+        let iterations = 0;
+        while (current && iterations < 50) {
             path.unshift(current);
             if (!current.parentId) break;
             current = this.files.find(f => f.id === current?.parentId);
+            iterations++;
         }
         return path;
     }
@@ -279,7 +183,7 @@ class FileSystemStore {
     }
 
     private save() {
-        localStorage.setItem('rivest_drive_v1', JSON.stringify(this.files));
+        localStorage.setItem('rivest_drive_v2', JSON.stringify(this.files));
         this.listeners.forEach(l => l());
     }
 }

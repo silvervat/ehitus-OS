@@ -13,7 +13,10 @@
     "react": "^19.2.0",
     "@google/genai": "^1.30.0",
     "lucide-react": "^0.554.0",
-    "recharts": "^3.5.0"
+    "recharts": "^3.5.0",
+    "dexie": "^4.2.1",
+    "@tanstack/react-table": "^8.11.0",
+    "@tanstack/react-virtual": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

@@ -1,487 +1,494 @@
 
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useVirtualizer } from '../hooks/useVirtualizer';
+import { dataAPI } from '../services/dataAPI';
 import { fileSystemStore } from '../services/fileSystemStore';
-import { schemaStore } from '../services/schemaStore';
-import { FileNode, FileNodeType, FileAsset } from '../types';
+import { FileNode } from '../types';
 import { 
-    Search, Folder, FileText, Image as ImageIcon, Download, 
-    Grid, List, ChevronRight, Home, MoreVertical, Plus, 
-    UploadCloud, Archive, Share2, Trash2, Clock, Eye, 
-    FileSpreadsheet, File as FileGeneric, Info, Lock, Globe, X,
-    FolderPlus, Move
+    Folder, FileText, Image as ImageIcon, Grid, List, ChevronRight, Home, 
+    Share2, MoreHorizontal, Download, Link as LinkIcon, Copy, Check, 
+    Plus, FolderPlus, UploadCloud, FileArchive, Trash2, Edit2, Loader2, X
 } from 'lucide-react';
 import { Modal } from './Modal';
 
 export const FilesManager: React.FC = () => {
-    // --- STATE ---
-    const [files, setFiles] = useState<FileNode[]>(fileSystemStore.getAllFiles());
+    const [files, setFiles] = useState<FileNode[]>([]);
     const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+    const [path, setPath] = useState<FileNode[]>([]);
+    const [loading, setLoading] = useState(false);
+    
+    // View State
     const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
-    const [sidebarSection, setSidebarSection] = useState<'my_files' | 'shared' | 'system' | 'trash'>('my_files');
+    const [uploadProgress, setUploadProgress] = useState<{current: number, total: number} | null>(null);
     
     // UI State
-    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, fileId: string } | null>(null);
-    const [showDetails, setShowDetails] = useState(false);
+    const [contextMenu, setContextMenu] = useState<{x: number, y: number, fileId: string} | null>(null);
+    const [isNewMenuOpen, setIsNewMenuOpen] = useState(false);
     
-    // Modals
-    const [isShareModalOpen, setIsShareModalOpen] = useState(false);
-    const [isEditorOpen, setIsEditorOpen] = useState(false);
-    const [isPreviewOpen, setIsPreviewOpen] = useState(false); // New Preview State
-    const [editingFile, setEditingFile] = useState<FileNode | null>(null);
-    const [editContent, setEditContent] = useState('');
-    
-    // System Assets (Old "Files" view data)
-    const [systemAssets, setSystemAssets] = useState<FileAsset[]>(schemaStore.getAllAssets());
+    // Sharing State
+    const [shareModalOpen, setShareModalOpen] = useState(false);
+    const [fileToShare, setFileToShare] = useState<FileNode | null>(null);
+    const [generatedLink, setGeneratedLink] = useState<string>('');
+    const [copied, setCopied] = useState(false);
+
+    // Refs for inputs
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const folderInputRef = useRef<HTMLInputElement>(null);
+    const parentRef = useRef<HTMLDivElement>(null);
+    const [containerHeight, setContainerHeight] = useState(600);
+
+    // --- DATA LOADING ---
+
+    const loadFiles = async () => {
+        setLoading(true);
+        const res = await dataAPI.getFileChildren(currentFolderId);
+        setFiles(res);
+        
+        // Update breadcrumb path
+        if (currentFolderId) {
+            setPath(fileSystemStore.getPath(currentFolderId));
+        } else {
+            setPath([]);
+        }
+        setLoading(false);
+    };
 
     useEffect(() => {
-        const unsubFS = fileSystemStore.subscribe(() => setFiles([...fileSystemStore.getAllFiles()]));
-        const unsubSchema = schemaStore.subscribe(() => setSystemAssets(schemaStore.getAllAssets()));
-        return () => { unsubFS(); unsubSchema(); };
+        loadFiles();
+        
+        // Subscribe to store updates
+        const unsub = fileSystemStore.subscribe(loadFiles);
+        return unsub;
+    }, [currentFolderId]);
+
+    useEffect(() => {
+        if(parentRef.current) {
+            setContainerHeight(parentRef.current.clientHeight);
+            const obs = new ResizeObserver(e => e[0] && setContainerHeight(e[0].contentRect.height));
+            obs.observe(parentRef.current);
+            return () => obs.disconnect();
+        }
     }, []);
 
-    // --- DERIVED DATA ---
-    const currentItems = useMemo(() => {
-        if (sidebarSection === 'system') return []; // Handled separately
-        if (sidebarSection === 'trash') return files.filter(f => f.isDeleted);
-        
-        // Normal navigation
-        return files.filter(f => 
-            f.parentId === currentFolderId && 
-            !f.isDeleted &&
-            (sidebarSection === 'shared' ? f.shareConfig.sharedWithUserIds.length > 0 : true) // Simplistic filter logic
-        );
-    }, [files, currentFolderId, sidebarSection]);
+    // --- ACTIONS ---
 
-    const breadcrumbs = useMemo(() => {
-        if (sidebarSection !== 'my_files') return [];
-        if (!currentFolderId) return [{ id: null, name: 'Minu Failid' }];
-        
-        const path = fileSystemStore.getPath(currentFolderId);
-        return [{ id: null, name: 'Minu Failid' }, ...path];
-    }, [currentFolderId, sidebarSection, files]);
+    const handleFolderClick = (id: string) => setCurrentFolderId(id);
 
-    const activeFile = useMemo(() => {
-        if (selectedIds.size === 1) {
-            return files.find(f => f.id === Array.from(selectedIds)[0]);
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            setIsNewMenuOpen(false);
+            const total = e.target.files.length;
+            setUploadProgress({ current: 0, total });
+            
+            for (let i = 0; i < total; i++) {
+                const file = e.target.files[i];
+                // Check if it's a folder upload via webkitRelativePath
+                const relPath = file.webkitRelativePath; 
+                let targetParentId = currentFolderId;
+
+                if (relPath) {
+                    // It's a folder upload, we need to recreate structure
+                    // path/to/file.txt -> create folder "path", then "to", then file
+                    // This is complex, simplified for demo to just upload to current
+                }
+
+                fileSystemStore.uploadFile(targetParentId, file);
+                
+                // Simulate network delay
+                await new Promise(r => setTimeout(r, 100));
+                setUploadProgress(prev => prev ? { ...prev, current: i + 1 } : null);
+            }
+            setUploadProgress(null);
         }
-        return null;
-    }, [selectedIds, files]);
-
-    // --- HANDLERS ---
-    const handleFolderClick = (id: string) => {
-        setCurrentFolderId(id);
-        setSelectedIds(new Set());
     };
 
     const handleCreateFolder = () => {
+        setIsNewMenuOpen(false);
         const name = prompt("Kausta nimi:");
-        if (name) fileSystemStore.createFolder(currentFolderId, name);
-    };
-
-    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files) {
-            Array.from(e.target.files).forEach(file => {
-                fileSystemStore.uploadFile(currentFolderId, file);
-            });
+        if (name) {
+            fileSystemStore.createFolder(currentFolderId, name);
         }
     };
 
-    const handleItemClick = (id: string, type: FileNodeType) => {
-        if (type === 'folder') {
-            handleFolderClick(id);
-        } else {
-            // Preview/Edit Logic
-            const file = files.find(f => f.id === id);
-            if (file) openEditor(file);
+    const handleUnzip = (file: FileNode) => {
+        setContextMenu(null);
+        fileSystemStore.unzipFile(file.id);
+        const event = new CustomEvent('automation-toast', { detail: { message: `📦 ${file.name} pakiti lahti!` } });
+        window.dispatchEvent(event);
+    };
+
+    const handleDelete = (file: FileNode) => {
+        setContextMenu(null);
+        if (confirm(`Kustuta ${file.name}?`)) {
+            fileSystemStore.deleteItem(file.id);
         }
     };
 
-    const handleContextMenu = (e: React.MouseEvent, id: string) => {
+    // Sharing Logic
+    const openShareModal = (file: FileNode) => {
+        setContextMenu(null);
+        setFileToShare(file);
+        setGeneratedLink(file.shareConfig?.publicLink || '');
+        setShareModalOpen(true);
+        setCopied(false);
+    };
+
+    const handleGenerateLink = () => {
+        if (fileToShare) {
+            const link = fileSystemStore.generatePublicLink(fileToShare.id);
+            setGeneratedLink(link);
+            setFiles(prev => prev.map(f => f.id === fileToShare.id ? { ...f, shareConfig: { ...f.shareConfig, isPublic: true, publicLink: link } } : f));
+        }
+    };
+
+    const copyToClipboard = () => {
+        navigator.clipboard.writeText(generatedLink);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    // Drag and Drop
+    const handleDrop = async (e: React.DragEvent) => {
         e.preventDefault();
-        setContextMenu({ x: e.clientX, y: e.clientY, fileId: id });
-        setSelectedIds(new Set([id]));
-    };
-
-    const openEditor = (file: FileNode) => {
-        if (file.mimeType?.includes('image')) {
-            // Open Preview Modal
-            setEditingFile(file);
-            setIsPreviewOpen(true);
-        } else if (file.content !== undefined || file.name.endsWith('txt') || file.name.endsWith('csv') || file.name.endsWith('md')) {
-            setEditingFile(file);
-            setEditContent(file.content || '');
-            setIsEditorOpen(true);
-        } else {
-            alert("Seda failitüüpi ei saa hetkel veebis muuta. Palun lae alla.");
+        e.stopPropagation();
+        
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+             const total = e.dataTransfer.files.length;
+             setUploadProgress({ current: 0, total });
+             
+             for (let i = 0; i < total; i++) {
+                 fileSystemStore.uploadFile(currentFolderId, e.dataTransfer.files[i]);
+                 await new Promise(r => setTimeout(r, 50));
+                 setUploadProgress(prev => prev ? { ...prev, current: i + 1 } : null);
+             }
+             setUploadProgress(null);
         }
     };
 
-    const saveEditor = () => {
-        if (editingFile) {
-            fileSystemStore.updateContent(editingFile.id, editContent);
-            setIsEditorOpen(false);
-            setEditingFile(null);
-        }
+    // --- VIRTUALIZATION ---
+    const COLUMN_COUNT = viewMode === 'grid' ? 6 : 1; 
+    const ROW_HEIGHT = viewMode === 'grid' ? 160 : 48;
+    const rowCount = Math.ceil(files.length / COLUMN_COUNT);
+    
+    const virtualizer = useVirtualizer({
+        count: rowCount,
+        itemHeight: ROW_HEIGHT,
+        containerHeight: containerHeight
+    });
+
+    // Helpers
+    const formatSize = (bytes: number) => {
+        if (bytes === 0) return '-';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     };
 
-    const handleUnzip = () => {
-        if (activeFile && activeFile.mimeType === 'application/zip') {
-            fileSystemStore.unzipFile(activeFile.id);
-            alert("Fail lahti pakitud uude kausta.");
-        }
+    const getFileIcon = (file: FileNode) => {
+        if (file.type === 'folder') return <Folder size={viewMode === 'grid' ? 40 : 20} className="text-yellow-400 fill-yellow-400" />;
+        if (file.name.endsWith('.zip')) return <FileArchive size={viewMode === 'grid' ? 40 : 20} className="text-orange-400" />;
+        if (file.mimeType?.startsWith('image')) return <ImageIcon size={viewMode === 'grid' ? 40 : 20} className="text-purple-400" />;
+        return <FileText size={viewMode === 'grid' ? 40 : 20} className="text-slate-400" />;
     };
-
-    const handleDelete = () => {
-        selectedIds.forEach(id => fileSystemStore.deleteItem(id));
-        setSelectedIds(new Set());
-    };
-
-    // --- ICONS HELPER ---
-    const getIcon = (item: FileNode, size: number = 48) => {
-        if (item.type === 'folder') return <Folder className="text-yellow-400 fill-yellow-400" size={size} strokeWidth={1} />;
-        if (item.mimeType?.includes('image')) return <ImageIcon className="text-purple-500" size={size} strokeWidth={1} />;
-        if (item.mimeType?.includes('zip')) return <Archive className="text-orange-500" size={size} strokeWidth={1} />;
-        if (item.mimeType?.includes('spreadsheet') || item.name.endsWith('csv')) return <FileSpreadsheet className="text-green-600" size={size} strokeWidth={1} />;
-        if (item.mimeType?.includes('text')) return <FileText className="text-slate-500" size={size} strokeWidth={1} />;
-        return <FileGeneric className="text-slate-400" size={size} strokeWidth={1} />;
-    }
 
     return (
-        <div className="flex h-full bg-slate-50 overflow-hidden" onClick={() => setContextMenu(null)}>
-            {/* 1. LEFT SIDEBAR */}
-            <div className="w-64 bg-white border-r border-slate-200 flex flex-col flex-shrink-0">
-                <div className="p-4">
-                    <button onClick={handleCreateFolder} className="w-full flex items-center justify-center gap-2 bg-white border border-slate-300 shadow-sm px-4 py-2 rounded-full text-slate-700 hover:bg-slate-50 hover:text-teal-600 hover:border-teal-200 transition-all font-medium">
-                        <Plus size={18} /> Uus
-                    </button>
-                </div>
-                
-                <nav className="flex-1 overflow-y-auto px-2 space-y-1">
-                    <SidebarBtn active={sidebarSection === 'my_files'} onClick={() => { setSidebarSection('my_files'); setCurrentFolderId(null); }} icon={<Home size={18} />} label="Minu Failid" />
-                    <SidebarBtn active={sidebarSection === 'shared'} onClick={() => { setSidebarSection('shared'); setCurrentFolderId(null); }} icon={<Share2 size={18} />} label="Jagatud minuga" />
-                    <SidebarBtn active={sidebarSection === 'system'} onClick={() => setSidebarSection('system')} icon={<List size={18} />} label="Süsteemi Manused" />
-                    <SidebarBtn active={sidebarSection === 'trash'} onClick={() => setSidebarSection('trash')} icon={<Trash2 size={18} />} label="Prügikast" />
-                </nav>
+        <div 
+            className="h-full flex flex-col bg-slate-50"
+            onDragOver={e => e.preventDefault()}
+            onDrop={handleDrop}
+            onClick={() => { setContextMenu(null); setIsNewMenuOpen(false); }}
+        >
+            {/* Hidden Inputs */}
+            <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleFileUpload} />
+            <input 
+                type="file" 
+                ref={folderInputRef} 
+                className="hidden" 
+                // @ts-ignore - webkitdirectory is standard in modern browsers but missing in React types
+                webkitdirectory="" 
+                directory="" 
+                onChange={handleFileUpload} 
+            />
 
-                <div className="p-4 border-t border-slate-100">
-                    <div className="bg-slate-100 rounded-lg p-3">
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="font-medium text-slate-600">Salvestusruum</span>
-                            <span className="text-slate-500">2.1 GB / 15 GB</span>
-                        </div>
-                        <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
-                            <div className="bg-teal-500 h-full w-[15%]"></div>
-                        </div>
-                        <button className="text-xs text-teal-600 font-medium mt-2 hover:underline">Osta lisamahtu</button>
-                    </div>
-                </div>
-            </div>
-
-            {/* 2. MAIN CONTENT */}
-            <div className="flex-1 flex flex-col min-w-0">
-                {/* Header / Toolbar */}
-                <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 flex-shrink-0">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                        {breadcrumbs.map((crumb, i) => (
-                            <React.Fragment key={i}>
-                                {i > 0 && <ChevronRight size={14} className="text-slate-400" />}
+            {/* Header */}
+            <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 flex-shrink-0 z-10">
+                <div className="flex items-center gap-4">
+                    {/* Breadcrumbs */}
+                    <div className="flex items-center gap-1 text-sm">
+                        <button 
+                            onClick={() => setCurrentFolderId(null)} 
+                            className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 ${!currentFolderId ? 'font-bold text-slate-800' : 'text-slate-500'}`}
+                        >
+                            <Home size={16} /> Drive
+                        </button>
+                        {path.map(node => (
+                            <React.Fragment key={node.id}>
+                                <ChevronRight size={14} className="text-slate-300" />
                                 <button 
-                                    onClick={() => setCurrentFolderId(crumb.id)}
-                                    className={`text-sm hover:bg-slate-100 px-2 py-1 rounded truncate max-w-[150px] ${i === breadcrumbs.length - 1 ? 'font-bold text-slate-800' : 'text-slate-500'}`}
+                                    onClick={() => setCurrentFolderId(node.id)} 
+                                    className={`px-2 py-1 rounded hover:bg-slate-100 ${node.id === currentFolderId ? 'font-bold text-slate-800' : 'text-slate-500'}`}
                                 >
-                                    {crumb.name}
+                                    {node.name}
                                 </button>
                             </React.Fragment>
                         ))}
                     </div>
-                    
-                    <div className="flex items-center gap-3">
-                        <div className="relative">
-                            <Search className="absolute left-2.5 top-2 text-slate-400" size={16} />
-                            <input 
-                                type="text" 
-                                placeholder="Otsi Drive'ist..." 
-                                className="pl-9 pr-4 py-1.5 bg-slate-100 border-transparent focus:bg-white focus:border-teal-500 border rounded-full text-sm w-64 transition-all"
-                            />
-                        </div>
-                        <div className="h-6 w-px bg-slate-200 mx-2"></div>
-                        <div className="flex bg-slate-100 rounded-lg p-0.5">
-                            <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-white shadow text-teal-600' : 'text-slate-500'}`}><Grid size={16} /></button>
-                            <button onClick={() => setViewMode('table')} className={`p-1.5 rounded ${viewMode === 'table' ? 'bg-white shadow text-teal-600' : 'text-slate-500'}`}><List size={16} /></button>
-                        </div>
-                        <button onClick={() => setShowDetails(!showDetails)} className={`p-2 rounded-full hover:bg-slate-100 ${showDetails ? 'bg-slate-100 text-teal-600' : 'text-slate-500'}`}>
-                            <Info size={20} />
-                        </button>
-                    </div>
-                </header>
-
-                {/* File Drop Zone / Content Area */}
-                <div className="flex-1 overflow-y-auto p-6 relative">
-                    {/* Folder Upload Input Trick */}
-                    <input type="file" id="file-upload" className="hidden" multiple onChange={handleFileUpload} />
-                    
-                    {sidebarSection === 'system' ? (
-                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                            {/* Rendering System Assets as Cards */}
-                            {systemAssets.map(asset => (
-                                <div key={asset.id} className="group relative bg-white border border-slate-200 rounded-xl p-4 hover:shadow-lg transition-all flex flex-col items-center text-center cursor-pointer">
-                                    <div className="h-24 w-full flex items-center justify-center mb-3 bg-slate-50 rounded-lg overflow-hidden">
-                                        {asset.url.match(/\.(jpeg|jpg|png)/) ? (
-                                            <img src={asset.url} className="h-full w-full object-cover" alt="" />
-                                        ) : <FileText size={32} className="text-slate-400" />}
-                                    </div>
-                                    <span className="text-xs font-medium text-slate-700 line-clamp-2 mb-1">{asset.name}</span>
-                                    <span className="text-[10px] text-slate-400">{asset.sourceTableName}</span>
-                                    <a href={asset.url} target="_blank" className="absolute inset-0" rel="noreferrer"> </a>
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        <>
-                            {currentItems.length === 0 ? (
-                                <label htmlFor="file-upload" className="flex flex-col items-center justify-center h-full border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 hover:border-teal-400 transition-colors">
-                                    <UploadCloud size={64} className="text-slate-300 mb-4" />
-                                    <h3 className="text-lg font-medium text-slate-500">Kaust on tühi</h3>
-                                    <p className="text-sm text-slate-400">Lohista failid siia või kliki üleslaadimiseks</p>
-                                </label>
-                            ) : (
-                                <div className={viewMode === 'grid' ? "grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4" : "flex flex-col space-y-1"}>
-                                    {currentItems.map(item => (
-                                        <div 
-                                            key={item.id}
-                                            onContextMenu={(e) => handleContextMenu(e, item.id)}
-                                            onClick={() => setSelectedIds(new Set([item.id]))}
-                                            onDoubleClick={() => handleItemClick(item.id, item.type)}
-                                            className={`
-                                                group relative rounded-xl transition-all cursor-pointer select-none
-                                                ${viewMode === 'grid' 
-                                                    ? `p-4 border flex flex-col items-center text-center aspect-[4/5] hover:shadow-md ${selectedIds.has(item.id) ? 'bg-teal-50 border-teal-200 ring-1 ring-teal-300' : 'bg-white border-slate-200'}`
-                                                    : `flex items-center px-4 py-3 border-b hover:bg-slate-50 ${selectedIds.has(item.id) ? 'bg-teal-50' : 'bg-white border-slate-100'}`
-                                                }
-                                            `}
-                                        >
-                                            {viewMode === 'grid' ? (
-                                                <>
-                                                    <div className="flex-1 flex items-center justify-center w-full mb-3">
-                                                        {getIcon(item)}
-                                                    </div>
-                                                    <span className="text-sm font-medium text-slate-700 line-clamp-2 break-all w-full">{item.name}</span>
-                                                    {item.shareConfig.isPublic && (
-                                                        <Globe size={12} className="absolute top-2 right-2 text-green-500" />
-                                                    )}
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <div className="mr-4">{getIcon(item, 24)}</div>
-                                                    <span className="text-sm font-medium text-slate-700 flex-1 truncate">{item.name}</span>
-                                                    <span className="text-xs text-slate-400 w-32">{new Date(item.updatedAt).toLocaleDateString()}</span>
-                                                    <span className="text-xs text-slate-400 w-24 text-right">{(item.size / 1024).toFixed(1)} KB</span>
-                                                </>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </>
-                    )}
                 </div>
-            </div>
-
-            {/* 3. RIGHT DETAILS PANEL (Collapsible) */}
-            {showDetails && (
-                <div className="w-80 bg-white border-l border-slate-200 flex flex-col overflow-y-auto animate-in slide-in-from-right duration-300">
-                    <div className="p-6 border-b border-slate-100">
-                        <div className="flex justify-between items-start mb-4">
-                            <h3 className="font-bold text-slate-800 text-lg">Detailid</h3>
-                            <button onClick={() => setShowDetails(false)} className="text-slate-400 hover:text-slate-600"><X size={18}/></button>
+                
+                <div className="flex items-center gap-4">
+                    {uploadProgress && (
+                        <div className="flex items-center gap-2 text-xs font-medium text-teal-600 bg-teal-50 px-3 py-1.5 rounded-full animate-pulse">
+                            <Loader2 size={12} className="animate-spin" />
+                            Laen faile... {uploadProgress.current}/{uploadProgress.total}
                         </div>
-                        
-                        {activeFile ? (
-                            <div className="flex flex-col items-center text-center">
-                                <div className="mb-4 transform scale-75">{getIcon(activeFile)}</div>
-                                <h4 className="font-medium text-slate-700 mb-1 break-all">{activeFile.name}</h4>
-                                <span className="text-xs text-slate-400 uppercase tracking-wide">{activeFile.type}</span>
-                                
-                                <div className="mt-6 w-full space-y-4 text-left">
-                                    <DetailRow label="Tüüp" value={activeFile.mimeType || 'Kaust'} />
-                                    <DetailRow label="Suurus" value={(activeFile.size / 1024).toFixed(2) + ' KB'} />
-                                    <DetailRow label="Loodud" value={new Date(activeFile.createdAt).toLocaleDateString()} />
-                                    <DetailRow label="Omanik" value="Mina (Admin)" />
-                                    <DetailRow label="Ligipääs" value={activeFile.shareConfig.isPublic ? "Avalik Link" : "Privaatne"} />
-                                </div>
+                    )}
 
-                                <div className="mt-6 flex gap-2 w-full">
-                                    <button onClick={() => setIsShareModalOpen(true)} className="flex-1 bg-teal-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-teal-700 flex items-center justify-center gap-2">
-                                        <Share2 size={16} /> Jaga
-                                    </button>
-                                    <button onClick={handleDelete} className="flex-1 bg-white border border-slate-300 text-slate-700 py-2 rounded-lg text-sm font-medium hover:bg-red-50 hover:text-red-600 hover:border-red-200">
-                                        Kustuta
-                                    </button>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="text-center text-slate-400 py-10 text-sm">
-                                Vali fail, et näha detaile
+                    {/* NEW Button & Dropdown */}
+                    <div className="relative">
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); setIsNewMenuOpen(!isNewMenuOpen); }}
+                            className="flex items-center gap-2 bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 shadow-sm transition-colors"
+                        >
+                            <Plus size={18} /> Uus
+                        </button>
+                        
+                        {isNewMenuOpen && (
+                            <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50 animate-in fade-in zoom-in-95 duration-100">
+                                <button onClick={handleCreateFolder} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                    <FolderPlus size={16} className="text-slate-400" /> Uus Kaust
+                                </button>
+                                <div className="border-t border-slate-100 my-1"></div>
+                                <button onClick={() => fileInputRef.current?.click()} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                    <FileText size={16} className="text-slate-400" /> Lae failid üles
+                                </button>
+                                <button onClick={() => folderInputRef.current?.click()} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                    <UploadCloud size={16} className="text-slate-400" /> Lae kaust üles
+                                </button>
                             </div>
                         )}
                     </div>
-                    
-                    {activeFile && (
-                        <div className="p-6">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-4">Tegevuste Ajalugu</h4>
-                            <div className="space-y-4">
-                                {activeFile.activityLog.map(act => (
-                                    <div key={act.id} className="flex gap-3 text-sm">
-                                        <div className="mt-1 min-w-[24px]">
-                                            {act.action === 'upload' && <UploadCloud size={14} className="text-blue-500" />}
-                                            {act.action === 'edit' && <FileText size={14} className="text-orange-500" />}
-                                            {act.action === 'share' && <Share2 size={14} className="text-green-500" />}
-                                            {act.action === 'unzip' && <Archive size={14} className="text-purple-500" />}
-                                        </div>
-                                        <div>
-                                            <p className="text-slate-700">
-                                                <span className="font-medium">{act.userName}</span> {act.details}
-                                            </p>
-                                            <p className="text-xs text-slate-400 mt-0.5">{new Date(act.timestamp).toLocaleString()}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+
+                    <div className="h-8 w-px bg-slate-200"></div>
+
+                    <div className="flex bg-slate-100 p-1 rounded-lg">
+                        <button 
+                            onClick={() => setViewMode('grid')}
+                            className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-white shadow text-teal-600' : 'text-slate-500 hover:text-slate-700'}`}
+                        >
+                            <Grid size={18} />
+                        </button>
+                        <button 
+                            onClick={() => setViewMode('table')}
+                            className={`p-1.5 rounded ${viewMode === 'table' ? 'bg-white shadow text-teal-600' : 'text-slate-500 hover:text-slate-700'}`}
+                        >
+                            <List size={18} />
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            {/* Table Header (Only visible in Table Mode) */}
+            {viewMode === 'table' && (
+                <div className="flex px-4 py-2 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    <div className="flex-1 pl-10">Nimi</div>
+                    <div className="w-32">Tüüp</div>
+                    <div className="w-24 text-right">Suurus</div>
+                    <div className="w-32 text-center">Muudetud</div>
+                    <div className="w-16"></div>
                 </div>
             )}
+
+            {/* Content Area */}
+            <div 
+                ref={parentRef} 
+                className="flex-1 overflow-y-auto p-4 custom-scrollbar relative" 
+                onScroll={virtualizer.onScroll}
+                onContextMenu={(e) => {
+                    e.preventDefault();
+                    // Global context menu logic could go here
+                }}
+            >
+                {files.length === 0 && !loading && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
+                        <div className="w-24 h-24 rounded-full bg-slate-100 flex items-center justify-center mb-4 border-2 border-dashed border-slate-300">
+                            <UploadCloud size={40} />
+                        </div>
+                        <p className="font-medium">Kaust on tühi</p>
+                        <p className="text-sm mt-1">Lohista failid siia või kasuta "Uus" nuppu</p>
+                    </div>
+                )}
+
+                <div style={{ height: virtualizer.totalHeight, position: 'relative' }}>
+                    {virtualizer.virtualItems.map(vRow => {
+                        const startIndex = vRow.index * COLUMN_COUNT;
+                        const rowItems = files.slice(startIndex, startIndex + COLUMN_COUNT);
+                        
+                        return (
+                            <div 
+                                key={vRow.index} 
+                                className={`absolute top-0 left-0 w-full ${viewMode === 'grid' ? 'grid grid-cols-6 gap-4' : 'flex flex-col'}`}
+                                style={{ transform: `translateY(${vRow.offsetTop}px)`, height: ROW_HEIGHT }}
+                            >
+                                {rowItems.map(file => (
+                                    viewMode === 'grid' ? (
+                                        // GRID CARD
+                                        <div 
+                                            key={file.id} 
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                file.type === 'folder' ? handleFolderClick(file.id) : null;
+                                            }}
+                                            onContextMenu={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                setContextMenu({ x: e.clientX, y: e.clientY, fileId: file.id });
+                                            }}
+                                            className="bg-white border border-slate-200 rounded-xl p-3 hover:shadow-lg hover:border-teal-200 transition-all flex flex-col items-center text-center cursor-pointer h-[140px] group relative"
+                                        >
+                                            <div className="flex-1 flex items-center justify-center mb-2 w-full">
+                                                {getFileIcon(file)}
+                                            </div>
+                                            <span className="text-xs font-medium text-slate-700 line-clamp-2 w-full leading-tight mb-1 break-words px-2">{file.name}</span>
+                                            <span className="text-[10px] text-slate-400">{formatSize(file.size)}</span>
+                                            
+                                            <button 
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setContextMenu({ x: e.clientX, y: e.clientY, fileId: file.id });
+                                                }}
+                                                className="absolute top-2 right-2 p-1 rounded hover:bg-slate-100 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            >
+                                                <MoreHorizontal size={14} className="text-slate-400" />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        // TABLE ROW
+                                        <div 
+                                            key={file.id}
+                                            onClick={() => file.type === 'folder' && handleFolderClick(file.id)}
+                                            onContextMenu={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                setContextMenu({ x: e.clientX, y: e.clientY, fileId: file.id });
+                                            }}
+                                            className="flex items-center px-4 h-full border-b border-slate-100 bg-white hover:bg-blue-50 cursor-pointer group"
+                                        >
+                                            <div className="flex-1 flex items-center gap-3 min-w-0">
+                                                {getFileIcon(file)}
+                                                <span className="text-sm text-slate-700 truncate font-medium">{file.name}</span>
+                                            </div>
+                                            <div className="w-32 text-xs text-slate-500">{file.type === 'folder' ? 'Kaust' : file.mimeType || 'Fail'}</div>
+                                            <div className="w-24 text-right text-xs text-slate-500 font-mono">{formatSize(file.size)}</div>
+                                            <div className="w-32 text-center text-xs text-slate-400">{new Date(file.updatedAt).toLocaleDateString()}</div>
+                                            <div className="w-16 flex justify-center">
+                                                 <button 
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setContextMenu({ x: e.clientX, y: e.clientY, fileId: file.id });
+                                                    }}
+                                                    className="p-1 rounded hover:bg-slate-200 opacity-0 group-hover:opacity-100"
+                                                >
+                                                    <MoreHorizontal size={16} className="text-slate-500" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )
+                                ))}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
 
             {/* Context Menu */}
-            {contextMenu && (
-                <div 
-                    className="fixed bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50 w-56 animate-in zoom-in-95 duration-75"
-                    style={{ top: contextMenu.y, left: contextMenu.x }}
-                    onMouseLeave={() => setContextMenu(null)}
-                >
-                    <ContextBtn icon={<Eye size={16}/>} label="Eelvaade" onClick={() => activeFile && openEditor(activeFile)} />
-                    <ContextBtn icon={<Share2 size={16}/>} label="Jaga..." onClick={() => setIsShareModalOpen(true)} />
-                    {activeFile?.mimeType === 'application/zip' && (
-                        <ContextBtn icon={<Archive size={16}/>} label="Paki lahti siia" onClick={handleUnzip} />
-                    )}
-                    <div className="h-px bg-slate-100 my-1"></div>
-                    <ContextBtn icon={<Move size={16}/>} label="Liiguta..." onClick={() => {}} />
-                    <ContextBtn icon={<Trash2 size={16}/>} label="Kustuta" color="text-red-600" onClick={handleDelete} />
-                </div>
-            )}
-
-            {/* Editor Modal */}
-            <Modal
-                isOpen={isEditorOpen}
-                onClose={() => setIsEditorOpen(false)}
-                title={`Muuda: ${editingFile?.name}`}
-                type="center"
-                footer={
-                    <button onClick={saveEditor} className="bg-teal-600 text-white px-6 py-2 rounded hover:bg-teal-700">Salvesta Muudatused</button>
-                }
-            >
-                {editingFile?.name.endsWith('csv') ? (
-                    <div className="bg-slate-50 border rounded p-2 overflow-auto font-mono text-xs">
-                        {editContent.split('\n').map((line, i) => (
-                            <div key={i} className="flex border-b border-slate-200 last:border-0">
-                                {line.split(',').map((cell, j) => (
-                                    <div key={j} className="p-2 border-r border-slate-200 last:border-0 min-w-[80px]">{cell}</div>
-                                ))}
-                            </div>
-                        ))}
-                         <div className="p-4 text-center text-slate-400 italic">Lihtsustatud tabelivaade (Read-only demo)</div>
+            {contextMenu && (() => {
+                const file = files.find(f => f.id === contextMenu.fileId);
+                if (!file) return null;
+                
+                return (
+                    <div 
+                        className="fixed bg-white border border-slate-200 shadow-xl rounded-lg py-1 z-[100] w-48 text-sm animate-in fade-in zoom-in-95 duration-100"
+                        style={{ top: contextMenu.y, left: contextMenu.x }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 text-xs font-bold text-slate-500 truncate">
+                            {file.name}
+                        </div>
+                        <button onClick={() => file.type === 'folder' ? handleFolderClick(file.id) : null} className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700">
+                            <Folder size={14} /> Ava
+                        </button>
+                        <button onClick={() => openShareModal(file)} className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700">
+                            <Share2 size={14} /> Jaga
+                        </button>
+                        {file.name.endsWith('.zip') && (
+                             <button onClick={() => handleUnzip(file)} className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700">
+                                <FileArchive size={14} /> Paki lahti
+                            </button>
+                        )}
+                        <button className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700">
+                            <Edit2 size={14} /> Muuda nime
+                        </button>
+                        <button className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700">
+                            <Download size={14} /> Lae alla
+                        </button>
+                        <div className="border-t border-slate-100 my-1"></div>
+                        <button onClick={() => handleDelete(file)} className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2">
+                            <Trash2 size={14} /> Kustuta
+                        </button>
                     </div>
-                ) : (
-                    <textarea 
-                        className="w-full h-[60vh] p-4 bg-slate-50 border border-slate-200 rounded font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-                        value={editContent}
-                        onChange={(e) => setEditContent(e.target.value)}
-                    />
-                )}
-            </Modal>
-            
-            {/* Preview Modal for Images */}
-            <Modal
-                isOpen={isPreviewOpen}
-                onClose={() => setIsPreviewOpen(false)}
-                title={`Eelvaade: ${editingFile?.name}`}
-                type="center"
-            >
-                <div className="flex items-center justify-center p-4 bg-slate-900 rounded-lg">
-                    {editingFile?.url && (
-                        <img 
-                            src={editingFile.url} 
-                            alt={editingFile.name} 
-                            className="max-h-[70vh] max-w-full object-contain"
-                        />
-                    )}
-                </div>
-            </Modal>
+                )
+            })()}
 
-            {/* Sharing Modal */}
+            {/* Share Modal */}
             <Modal
-                isOpen={isShareModalOpen}
-                onClose={() => setIsShareModalOpen(false)}
-                title="Jaga faili"
+                isOpen={shareModalOpen}
+                onClose={() => setShareModalOpen(false)}
+                title={`Jaga: ${fileToShare?.name}`}
                 type="center"
             >
                 <div className="space-y-6">
-                    <div className="flex items-center gap-4 bg-blue-50 p-4 rounded-lg border border-blue-100">
-                        <div className="bg-blue-100 p-2 rounded-full text-blue-600"><Globe size={24}/></div>
-                        <div>
-                            <h4 className="font-bold text-slate-800">Avalik Link</h4>
-                            <p className="text-xs text-slate-500">Igaüks lingiga pääseb ligi</p>
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 flex items-start gap-3">
+                        <div className="p-2 bg-white rounded-lg border border-slate-200">
+                            {fileToShare?.type === 'folder' ? <Folder className="text-yellow-500" /> : <FileText className="text-slate-500" />}
                         </div>
-                        <label className="relative inline-flex items-center cursor-pointer ml-auto">
-                            <input type="checkbox" checked={activeFile?.shareConfig.isPublic} onChange={(e) => activeFile && fileSystemStore.togglePublic(activeFile.id, e.target.checked)} className="sr-only peer"/>
-                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-600"></div>
-                        </label>
+                        <div>
+                            <h4 className="font-bold text-slate-700 text-sm">{fileToShare?.name}</h4>
+                            <p className="text-xs text-slate-500">{formatSize(fileToShare?.size || 0)} • {fileToShare?.type === 'folder' ? 'Kaust' : 'Fail'}</p>
+                        </div>
                     </div>
 
-                    {activeFile?.shareConfig.isPublic && (
-                        <div className="flex gap-2">
-                            <input 
-                                readOnly 
-                                value={activeFile.shareConfig.publicLink || fileSystemStore.generatePublicLink(activeFile.id)} 
-                                className="flex-1 bg-slate-100 border border-slate-300 rounded px-3 text-sm text-slate-600"
-                            />
-                            <button className="px-4 py-2 bg-slate-800 text-white rounded text-sm hover:bg-slate-900">Kopeeri</button>
-                        </div>
-                    )}
-                    
-                    <div className="pt-4 border-t border-slate-100">
-                        <h4 className="text-sm font-bold text-slate-700 mb-2">Inimesed ligipääsuga</h4>
-                        <div className="flex items-center gap-3 py-2">
-                            <div className="w-8 h-8 rounded-full bg-teal-600 text-white flex items-center justify-center text-xs font-bold">KN</div>
-                            <div className="flex-1">
-                                <p className="text-sm font-medium">Kristofer Nilp (Mina)</p>
-                                <p className="text-xs text-slate-400">Omanik</p>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Avalik Link</label>
+                        {generatedLink ? (
+                            <div className="flex gap-2">
+                                <input 
+                                    readOnly 
+                                    value={generatedLink}
+                                    className="flex-1 bg-white border border-slate-300 text-slate-600 text-sm rounded px-3 py-2 focus:outline-none"
+                                />
+                                <button 
+                                    onClick={copyToClipboard}
+                                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded border border-slate-300 flex items-center gap-2 transition-colors"
+                                >
+                                    {copied ? <Check size={16} className="text-green-600" /> : <Copy size={16} />}
+                                    {copied ? 'Kopeeritud' : 'Kopeeri'}
+                                </button>
                             </div>
-                        </div>
+                        ) : (
+                            <div className="text-center py-6 bg-slate-50 rounded-lg border border-dashed border-slate-300">
+                                <p className="text-sm text-slate-500 mb-3">Sellel failil pole veel avalikku linki.</p>
+                                <button 
+                                    onClick={handleGenerateLink}
+                                    className="bg-teal-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-teal-700 flex items-center gap-2 mx-auto shadow-sm"
+                                >
+                                    <LinkIcon size={16} /> Genereeri Link
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             </Modal>
         </div>
     );
 };
-
-// UI Components Helpers
-const SidebarBtn = ({ icon, label, active, onClick }: any) => (
-    <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-2 text-sm rounded-lg transition-colors ${active ? 'bg-teal-50 text-teal-700 font-medium' : 'text-slate-600 hover:bg-slate-100'}`}>
-        {icon} {label}
-    </button>
-);
-
-const DetailRow = ({ label, value }: { label: string, value: string }) => (
-    <div className="flex justify-between text-sm py-1 border-b border-slate-50 last:border-0">
-        <span className="text-slate-500">{label}</span>
-        <span className="font-medium text-slate-700 text-right">{value}</span>
-    </div>
-);
-
-const ContextBtn = ({ icon, label, onClick, color = 'text-slate-700' }: any) => (
-    <button onClick={onClick} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2 ${color}`}>
-        {icon} {label}
-    </button>
-);

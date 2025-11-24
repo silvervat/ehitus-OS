@@ -24,7 +24,7 @@ export interface SidebarItem {
 
 // --- DYNAMIC SCHEMA TYPES ---
 
-export type ColumnType = 'text' | 'number' | 'date' | 'select' | 'reference' | 'currency' | 'status' | 'image' | 'file' | 'tags' | 'progress' | 'long_text';
+export type ColumnType = 'text' | 'number' | 'date' | 'select' | 'reference' | 'currency' | 'status' | 'image' | 'file' | 'tags' | 'progress' | 'long_text' | 'formula';
 
 export interface ColumnValidation {
     required?: boolean;
@@ -53,6 +53,10 @@ export interface ColumnDefinition {
   // New features for Form Designer 2.0
   validation?: ColumnValidation;
   style?: ColumnStyle;
+
+  // Formula Engine
+  formula?: string; // e.g. "SUM([Budget])"
+  resultType?: 'number' | 'text' | 'date' | 'boolean';
 }
 
 export interface FormSection {
@@ -83,6 +87,108 @@ export interface TableDefinition {
   views?: SavedView[]; // User-defined saved views
   formLayout?: FormLayout; // Custom form design
   isSystem?: boolean; // If true, cannot be deleted
+}
+
+// --- FORMULAS ---
+
+export type FormulaType = 
+  | 'SUM' | 'AVG' | 'COUNT' | 'MIN' | 'MAX'
+  | 'IF' | 'AND' | 'OR' | 'NOT'
+  | 'CONCAT' | 'LEFT' | 'RIGHT' | 'MID' | 'TRIM'
+  | 'TODAY' | 'NOW' | 'DATEADD' | 'DATEDIFF'
+  | 'LOOKUP' | 'VLOOKUP' | 'FILTER'
+  | 'ROLLUP' | 'LINK_TO_RECORD';
+
+// --- AUTOMATION TYPES ---
+
+export type AutomationTriggerType = 
+  | 'ROW_CREATED' 
+  | 'ROW_UPDATED' 
+  | 'ROW_DELETED'
+  | 'STATUS_CHANGED' 
+  | 'DATE_ARRIVED'
+  | 'SCHEDULED'
+  | 'WEBHOOK_RECEIVED';
+
+export type AutomationActionType = 
+  | 'SEND_EMAIL' 
+  | 'CREATE_ROW' 
+  | 'UPDATE_ROW' 
+  | 'DELETE_ROW'
+  | 'NOTIFY_USER'
+  | 'AI_GENERATE'
+  | 'CALL_WEBHOOK';
+
+export interface AutomationCondition {
+  column: string;
+  operator: 'equals' | 'not_equals' | 'contains' | 'greater_than' | 'less_than' | 'is_empty' | 'is_not_empty';
+  value: any;
+}
+
+export interface AutomationAction {
+  type: AutomationActionType;
+  targetColumn?: string;
+  payload: any; // e.g. { to: '...', subject: '...' } or { updates: { status: 'Done' } }
+}
+
+export interface AutomationTrigger {
+  type: AutomationTriggerType;
+  columnKey?: string;
+  fromValue?: string;
+  toValue?: string;
+  cron?: string; // For SCHEDULED
+}
+
+export interface Automation {
+    id: string;
+    name: string;
+    active: boolean;
+    tableId: string;
+    trigger: AutomationTrigger;
+    conditions: AutomationCondition[];
+    actions: AutomationAction[];
+    runCount: number;
+    lastRun?: Date;
+}
+
+// --- COLLABORATION TYPES ---
+
+export interface Comment {
+    id: string;
+    tableId: string;
+    rowId: string;
+    authorId: string;
+    authorName: string;
+    content: string;
+    createdAt: string;
+    mentions?: string[];
+    replies?: Comment[];
+    reactions?: Record<string, string[]>; // emoji -> userIds
+}
+
+export interface UserCursor {
+    userId: string;
+    userName: string;
+    color: string;
+    tableId: string;
+    // We track Row ID, not index, because index changes with sort/filter
+    focusedRowId?: string; 
+    focusedColKey?: string;
+    isEditing?: boolean; // Is the user currently typing/locking this cell?
+    lastActive: number;
+}
+
+// --- HISTORY & UNDO/REDO ---
+
+export interface HistoryEntry {
+  id: string;
+  timestamp: Date;
+  userId: string;
+  type: 'CREATE' | 'UPDATE' | 'DELETE';
+  tableId: string;
+  rowId?: string;
+  before: any;
+  after: any;
 }
 
 // --- EXTERNAL SYNC & VIEWS ---
@@ -178,13 +284,14 @@ export interface FileNode {
 export interface GridFocus {
     rowIndex: number;
     colKey: string;
+    rowId: string; // Added rowId for robust tracking
 }
 
 // --- TIMELINE / GANTT TYPES ---
 
 export interface TimelineTask {
     id: string;
-    resourceId: string; // maps to Row ID usually
+    resourceId: string;
     label: string;
     startDate: Date;
     endDate: Date;
